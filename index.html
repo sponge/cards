@@ -1,0 +1,459 @@
+<!DOCTYPE html>
+<head>
+  <script src="http://cdnjs.cloudflare.com/ajax/libs/modernizr/2.0.6/modernizr.min.js"></script>
+  <script src="http://ajax.googleapis.com/ajax/libs/jquery/1.6.2/jquery.min.js"></script>
+  <script src="/js/QTransform.js"></script>
+  <script src="/socket.io/socket.io.js"></script>
+  <script type="text/javascript">
+    /*
+     * jQuery throttle / debounce - v1.1 - 3/7/2010
+     * http://benalman.com/projects/jquery-throttle-debounce-plugin/
+     * 
+     * Copyright (c) 2010 "Cowboy" Ben Alman
+     * Dual licensed under the MIT and GPL licenses.
+     * http://benalman.com/about/license/
+     */
+    (function(b,c){var $=b.jQuery||b.Cowboy||(b.Cowboy={}),a;$.throttle=a=function(e,f,j,i){var h,d=0;if(typeof f!=="boolean"){i=j;j=f;f=c}function g(){var o=this,m=+new Date()-d,n=arguments;function l(){d=+new Date();j.apply(o,n)}function k(){h=c}if(i&&!h){l()}h&&clearTimeout(h);if(i===c&&m>e){l()}else{if(f!==true){h=setTimeout(i?k:l,i===c?e-m:e)}}}if($.guid){g.guid=j.guid=j.guid||$.guid++}return g};$.debounce=function(d,e,f){return f===c?a(d,e,false):a(d,f,e!==false)}})(this);
+  </script>
+  <script type="text/javascript">
+
+    var socket;
+
+    var c = {};
+
+
+    // =====
+    // LOGIN
+    // =====
+
+    c.login = {};
+    c.login.form = '#joinForm';
+    c.login.el = '#loginWindow';
+    c.login.joinButton = '#joinButton';
+
+    c.login.init = function() {
+      $('#name').val('Player'+ parseInt(Math.random()*10000));
+      $(c.login.form).submit(function() {
+        var name = this.name.value;
+        var room = this.room.value;
+        if (!name.length || !room.length) {
+          alert("Fill in the forms you jerk");
+          return false;
+        }
+        c.login.join(name, room);
+        return false;
+      });
+    };
+
+    c.login.show = function() {
+      $(c.login.el).show();
+    };
+
+    c.login.hide = function() {
+      $(c.login.el).hide();
+    };
+
+    c.login.showJoin = function() {
+      $(c.login.joinButton).show();
+    };
+
+    c.login.hideJoin = function() {
+      $(c.login.joinButton).hide();
+    };
+
+    c.login.join = function(name, room) {
+      socket.emit('userinfo', { 'name': name, 'room': room });
+    };
+
+    // ====
+    // CHAT
+    // ====
+
+    c.chat = {};
+    c.chat.form = '#chatForm';
+    c.chat.el = '#chatWindow';
+    c.chat.area = '#chatArea';
+
+    c.chat.init = function() {
+      $(c.chat.form).submit(function() {
+        console.log('called submit');
+        c.chat.send(this.what.value)
+        this.what.value = '';
+        return false;
+      });
+    };
+
+    c.chat.show = function() {
+      $(c.chat.el).show();
+    };
+
+    c.chat.hide = function() {
+      $(c.chat.el).hide();
+    };
+
+    // Messages are just status messages from the server
+    c.chat.addMessage = function(what) {
+      // FIXME: XSS
+      var o = $(c.chat.area).get(0);
+      var shouldScrollDown = o.offsetHeight + o.scrollTop == o.scrollHeight;
+      $(c.chat.area).append('<div class="message">*** '+ what +'</div>');
+      if (shouldScrollDown) {
+        o.scrollTop = o.scrollHeight;
+      }
+    };
+
+    // Chats have a speaker and a message
+    c.chat.addChat = function(who, what) {
+      // FIXME: XSS
+      var o = $(c.chat.area).get(0);
+      var shouldScrollDown = o.offsetHeight + o.scrollTop == o.scrollHeight;
+      $(c.chat.area).append('<div class="chat">&lt;'+ who +'&gt; '+ what);
+      if (shouldScrollDown) {
+        o.scrollTop = o.scrollHeight;
+      }
+    };
+
+    c.chat.send = function(what) {
+      socket.emit('chat', what);
+    };
+
+    // ====
+    // CARD
+    // ====
+
+    c.card = {};
+    c.card.cards = [];
+    c.card.selectedCard = undefined;
+    c.card.offsetX = undefined;
+    c.card.offsetY = undefined;
+    c.card.rotationStart = undefined;
+    c.card.valueEnum = [2,3,4,5,6,7,8,9,10,'j','q','k','a'];
+    c.card.suitEnum = ['hearts','diamonds','clubs','spades'];
+    
+    c.card.add = function(id, x, y, r, value, suit) {
+      var card = {};
+      card.id = id;
+      card.x = x;
+      card.y = y;
+      card.rotation = r;
+      card.value = value;
+      card.suit = suit;
+      card.dom = $('<div class="card"></div>');
+      c.card.cards[id] = card;
+
+      var imgPath = "url('/img/"+ c.card.suitEnum[card.suit] +'-'+ c.card.valueEnum[card.value] +"-150.png')";
+      card.dom.css('background-image', imgPath);
+
+      c.card.move(id, x, y, r);
+      $(card.dom).data('cid', card.id);
+      if (Modernizr.touch) {
+        $(card.dom).bind('touchstart', c.card.mousedown);
+      } else {
+        $(card.dom).bind('mousedown', c.card.mousedown);
+      }
+      $('#playArea').append(card.dom);
+    };
+
+    // FIXME: need some sort of general code to update card state, this will prob be it eventually
+    c.card.move = function(id, x, y, r) {
+      var card = c.card.cards[id];
+      if (!card) {
+        // got an illegal card id, flush and request all cards?
+        return;
+      }
+
+      card.x = x;
+      card.y = y;
+      card.rotation = r;
+      // maybe i want to mark this card as dirty and let a timer move it?
+      // FIXME: hack. c.room.state.cards and c.card.cards both have a lot of shared info
+      var zi = c.room.state.cards[id].lock ? 999 : card.y;
+      $(c.card.cards[id].dom).css({'translateX': card.x, 'translateY': card.y, 'z-index': zi, 'rotate': card.rotation+'deg'});
+      if ( c.room.state.cards[id].lock ) {
+        $(c.card.cards[id].dom).addClass('glow');
+      } else {
+        $(c.card.cards[id].dom).removeClass('glow');
+      }
+
+    }
+
+    c.card.gesturestart = function(e) {
+      var cid = $(e.target).data('cid');
+      if (c.room.state.cards[cid].lock == true) {
+        console.log("can't move locked card");
+        return;
+      }
+      c.card.selectedCard = cid;
+      socket.emit('lock', c.card.selectedCard);
+      c.card.rotationStart = c.room.state.cards[cid].rotation;
+      // FIXME: this shit doesn't even work
+
+      e.preventDefault();
+      return false;
+    }
+
+    c.card.gesturechange = function(e) {
+      var cid = c.card.selectedCard;
+      if (cid == undefined) {
+        return;
+      }
+
+      var card = c.room.state.cards[cid]
+
+      e = e.originalEvent;
+      var node = e.target;
+      // FIXME: gotta get rotationstart in there somehow
+      card.rotation = e.rotation % 360;
+      socket.emit('move', cid, null, null, parseInt(card.rotation));
+    }
+
+    c.card.mousedown = function(e) {
+      var cid = $(e.target).data('cid');
+      if (c.room.state.cards[cid].lock == true) {
+        console.log("can't move locked card");
+        return;
+      }
+      c.card.selectedCard = cid;
+      socket.emit('lock', c.card.selectedCard);
+      c.card.offsetX = e.offsetX;
+      c.card.offsetY = e.offsetY;
+
+      e.preventDefault();
+      return false;
+    }
+    
+    c.card.mousemove = function(e) {
+      if (c.card.selectedCard == undefined) {
+        return;
+      }
+      var x,y;
+      if (e.type == 'touchmove') {
+        e = e.originalEvent;
+        x = e.touches[0].pageX;
+        y = e.touches[0].pageY;
+      } else {
+        x = e.clientX - c.card.offsetX;
+        y = e.clientY - c.card.offsetY;
+      }
+      socket.emit('move', c.card.selectedCard, x, y, null);
+
+      e.preventDefault();
+      return false;
+    }
+
+    c.card.mouseup = function(e) {
+      if (c.card.selectedCard == undefined) {
+        return;
+      }
+      socket.emit('unlock', c.card.selectedCard);
+      c.card.selectedCard = undefined;
+
+      e.preventDefault();
+      return false;
+    }
+    // ====
+    // ROOM
+    // ====
+
+    c.room = {};
+    c.room.state = {}
+
+    // ==========
+    // SOCKET OPS
+    // ==========
+
+    var socket = io.connect('/');
+
+    // Some of our messages we don't want a lot of overhead for and
+    // we won't use emit.
+    socket.on('message', function(d) {
+      if (d.charCodeAt(0) == 0) {
+        var cid = d.charCodeAt(1);
+        // card update
+        if (c.room.state.cards[cid] == undefined) {
+          c.chat.addMessage('we have a new card');
+          return;  
+        }
+
+        var card = c.room.state.cards[cid];
+        card.x = d.charCodeAt(2);
+        card.y = d.charCodeAt(3);
+        card.rotation = d.charCodeAt(4);
+        card.v = d.charCodeAt(5);
+        card.s = d.charCodeAt(6);
+        card.lock = d.charCodeAt(7);
+        c.card.move(cid, card.x, card.y, card.rotation);
+      }
+    });
+
+    // Don't do anything yet, just show the join button
+    // for now
+    socket.on('connect', function(d) {
+      console.log('connected %o', d);
+      c.login.showJoin();
+    });
+
+    // If we lose the connection, boot them back to login
+    // and hide the Join button until we reconnect.
+    socket.on('disconnect', function(d) {
+      console.log('disconnected %o', d);
+      $('#playArea').hide();
+      c.chat.hide();
+      c.login.show();
+      c.login.hideJoin();
+    });
+
+    // We successfully joined the room. Prep the field.
+    socket.on('joined', function(d) {
+      c.login.hide();
+      c.chat.show();
+      $('#playArea').show();
+      c.room.state = d;
+      for (var i in c.room.state.cards) {
+        var card = c.room.state.cards[i];
+        c.card.add(card.id, card.x, card.y, card.rotation, card.v, card.s);
+      }
+    });
+
+    // Messages are info that will appear in chat window.
+    socket.on('info', function(d) {
+      c.chat.addMessage(d);
+    });
+
+    // Got a server-side error. Alert will do for now.
+    socket.on('error', function(text) {
+      alert('Got error from server: '+ text);
+    });
+
+    // Got a chat message from the server. Add a chat line.
+    socket.on('chat', function(d) {
+      c.chat.addChat(d.who, d.what);
+    });
+
+    $(function() {
+      // Init anything that wants to
+      c.login.init();
+      c.chat.init();
+      if (Modernizr.touch) {
+        $(window).bind('touchmove', $.throttle( 33, c.card.mousemove ));
+        $(window).bind('touchend', c.card.mouseup);
+        $(window).bind('gesturestart', c.card.gesturestart);
+        $(window).bind('gesturechange', c.card.gesturechange);
+      } else {
+        $(window).bind('mousemove', $.throttle( 33, c.card.mousemove ));
+        $(window).bind('mouseup', c.card.mouseup);
+      }
+      c.login.show();
+    });
+
+  </script>
+  <style type="text/css">
+    body { 
+      background-color: #10361F;
+    }
+
+    #loginWindow {
+      position: absolute;
+      display: none;
+      box-sizing: border-box;
+      width: 300px;
+      height: 200px;
+      left: 50%;
+      top: 50%;
+      margin: -100px -150px;
+      border: 8px solid black;
+      background-color: rgba(255, 255, 255, 0.8);
+      text-align: center;
+      z-index: 99999;
+    }
+
+    #loginWindow button {
+      display: none;
+    }
+
+    #chatWindow {
+      position: fixed;
+      display: none;
+      width: 33%;
+      height: 200px;
+      bottom: 0;
+      right: 0;
+      border: 1px solid black;
+      background-color: #ddd;
+      z-index: 99999;
+    }
+
+    #chatArea {
+      position: absolute;
+      background-color: white;
+      top: 0;
+      left: 0;
+      right: 0;
+      bottom: 32px;
+      overflow-y: scroll;
+    }
+
+    #chatForm {
+      position: absolute;
+      display: block;
+      bottom: 0px;
+      left: 0;
+      width: 100%;
+      height: 32px;
+    }
+
+    #playArea {
+      background: url('/img/bg.jpg');
+      display: none;
+      position: fixed;
+      top: 0;
+      left: 0;
+      bottom: 0;
+      right: 0;
+      overflow: automatic;
+    }
+
+    .card {
+      position: fixed;
+      width: 130px;
+      height: 187px;
+      border-radius: 15px;
+      background: white no-repeat center;
+      background-color: white;
+      background-repeat: none;
+      background-position:;
+      border: 1px solid #999;
+    }
+
+    .glow {
+      box-shadow: 0 0 25px rgba(0, 255, 255, 1);
+      -webkit-box-shadow: 0 0 20px rgba(0, 0, 255, 1); 
+      -moz-box-shadow: 0 0 20px rgba(0, 0, 255, 1); 
+    }
+
+      
+  </style>
+</head>
+<body>
+
+  <div id="playArea">
+  </div>
+
+  <div id="loginWindow">
+    Connect to Card Server <br/>
+    <form id="joinForm">
+      Name: <input id="name"/> <br/>
+      Room: <input id="room" value="test"/> <br/>
+      <input id="joinButton" type="submit" value="Connect"/>
+    </form>
+  </div>
+
+  <div id="chatWindow">
+    <div id="chatArea"></div>
+    <form id="chatForm">
+      <input name="what" autocomplete="off"/>
+      <input type="submit" value="Send"/>
+    </form>
+  </div>
+
+</body>
